@@ -1,0 +1,65 @@
+name: Bare Metal Provision
+
+on:
+  repository_dispatch:
+    types: [provision-node]
+
+jobs:
+  validate-and-provision:
+    name: Validate & Provision Node
+    runs-on: [self-hosted, linux, provisioner]
+    timeout-minutes: 240
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Hardware validation (NetBox)
+        env:
+          NETBOX_TOKEN: ${{ secrets.NETBOX_TOKEN }}
+          NETBOX_URL: ${{ secrets.NETBOX_URL }}
+        run: |
+          python3 infra-scripts/netbox_validate.py "${{ github.event.client_payload.netbox_id }}" || exit 1
+
+      - name: Resolve management IP from NetBox
+        id: get_ip
+        run: |
+          python3 infra-scripts/get_management_ip.py "${{ github.event.client_payload.netbox_id }}" > /tmp/host_ip
+          cat /tmp/host_ip
+
+      - name: Power cycle node using Redfish
+        env:
+          REDFISH_USER: ${{ secrets.REDFISH_USER }}
+          REDFISH_PASS: ${{ secrets.REDFISH_PASS }}
+        run: |
+          HOST_IP=$(cat /tmp/host_ip)
+          python3 infra-scripts/redfish_powercycle.py --host "${HOST_IP}" --user $REDFISH_USER --pass $REDFISH_PASS
+
+      - name: Write iPXE entry for MAC
+        env:
+          TFTP_HTTP_BASE: ${{ secrets.TFTP_HTTP_BASE }}
+        run: |
+          python3 infra-scripts/write_ipxe.py --mac "${{ github.event.client_payload.mac }}" --image-url "${TFTP_HTTP_BASE}/images/ubuntu22/"
+
+      - name: Wait for node PXE to boot and report
+        run: |
+          python3 infra-scripts/wait_for_provision.py --hostname "${{ github.event.client_payload.node_name }}" --timeout 3600
+
+      - name: Run Ansible for post-install config and kubeadm bootstrap
+        env:
+          BASTION_HOST: ${{ secrets.BASTION_HOST }}
+          BASTION_USER: ${{ secrets.BASTION_USER }}
+          BASTION_SSH_KEY: ${{ secrets.BASTION_SSH_KEY }}
+        run: |
+          ssh -o StrictHostKeyChecking=no -i /tmp/bastion_key ${BASTION_USER}@${BASTION_HOST} "ansible-playbook /opt/ansible/playbooks/provision.yml -i /opt/ansible/inventory/${{ github.event.client_payload.node_name }} --extra-vars 'node=${{ github.event.client_payload.node_name }}'"
+
+      - name: Notify ArgoCD to sync cluster manifests
+        env:
+          ARGOCD_TOKEN: ${{ secrets.ARGOCD_TOKEN }}
+        run: |
+          curl -sS -X POST -H "Content-Type: application/json" -H "Authorization: Bearer $ARGOCD_TOKEN" \
+           https://argocd.example.com/api/v1/applications/provisioned-cluster/sync -d '{"revision":"HEAD","prune":true,"strategicMergePatch":[]}'
