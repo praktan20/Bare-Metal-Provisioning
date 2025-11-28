@@ -1,0 +1,18 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: provisioned-cluster
+  namespace: argocd
+spec:
+  destination:
+    server: https://<NEW_CLUSTER_API>
+    namespace: kube-system
+  project: default
+  source:
+    repoURL: 'https://github.com/org/cluster-manifests'
+    path: clusters/provisioned-cluster
+    targetRevision: HEAD
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
