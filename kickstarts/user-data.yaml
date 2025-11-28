@@ -1,0 +1,10 @@
+#cloud-config
+hostname: node-{{ inventory_hostname }}
+manage_etc_hosts: true
+packages:
+  - curl
+  - jq
+runcmd:
+  - sed -i '/swap/s/^/#/' /etc/fstab
+  - swapoff -a
+  - curl -sS http://provision-collector.internal/api/provision_complete -d '{"host":"'"$(hostname -s)"'"}' -H "Content-Type: application/json"
