@@ -1,0 +1,45 @@
+---
+- hosts: all
+  become: true
+  vars:
+    kube_version: "1.27.4"
+  tasks:
+    - name: Ensure apt packages
+      apt:
+        name: [ "apt-transport-https", "ca-certificates", "curl", "jq" ]
+        state: present
+        update_cache: yes
+
+    - name: Disable swap permanently
+      ansible.builtin.shell: sed -i '/swap/s/^/#/' /etc/fstab && swapoff -a
+      args: warn: false
+
+    - name: Load kernel modules
+      copy:
+        dest: /etc/modules-load.d/k8s.conf
+        content: |
+          br_netfilter
+
+    - name: Set sysctl for k8s
+      copy:
+        dest: /etc/sysctl.d/k8s.conf
+        content: |
+          net.bridge.bridge-nf-call-ip6tables = 1
+          net.bridge.bridge-nf-call-iptables = 1
+
+    - name: Apply sysctl
+      command: sysctl --system
+
+    - name: Add kubernetes apt repo
+      apt_repository:
+        repo: 'deb https://apt.kubernetes.io/ kubernetes-xenial main'
+        state: present
+
+    - name: Install kube packages
+      apt:
+        name:
+          - "kubelet={{ kube_version }}-00"
+          - "kubeadm={{ kube_version }}-00"
+          - "kubectl={{ kube_version }}-00"
+        state: present
+        update_cache: yes
